@@ -1,11 +1,20 @@
-import os
-
+import sys
 import logging
+import json
+import re
+import argparse
 
 from cassandra.cluster import Cluster
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import from_json, col
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+
+from kafka import KafkaConsumer
+
+logging.basicConfig(
+    level=logging.INFO,  # Set to INFO or DEBUG for more detailed output
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 
 class BCOLORS:
@@ -35,12 +44,12 @@ def create_table(session):
     session.execute(
         """
     CREATE TABLE IF NOT EXISTS spark_streams.created_users (
-        id UUID PRIMARY KEY,
+        id TEXT PRIMARY KEY,
         first_name TEXT,
         last_name TEXT,
         gender TEXT,
         address TEXT,
-        post_code INT,
+        post_code TEXT,
         email TEXT,
         username TEXT,
         dob TEXT,
@@ -53,48 +62,37 @@ def create_table(session):
     print("Table created successfully!")
 
 
-def insert_data(session, **kwargs):
-    print("inserting data...")
+def format_string_cassandra(text: str):
+    return re.sub(r"'", r"''", text)
 
-    user_id = kwargs.get("id")
-    first_name = kwargs.get("first_name")
-    last_name = kwargs.get("last_name")
-    gender = kwargs.get("gender")
-    address = kwargs.get("address")
-    postcode = kwargs.get("post_code")
-    email = kwargs.get("email")
-    username = kwargs.get("username")
-    dob = kwargs.get("dob")
-    registered_date = kwargs.get("registered_date")
-    phone = kwargs.get("phone")
-    picture = kwargs.get("picture")
+
+def insert_data(session, json_obj):
+    # print("inserting data...")
+
+    user_id = format_string_cassandra(json_obj.get("id"))
+    first_name = format_string_cassandra(json_obj.get("first_name"))
+    last_name = format_string_cassandra(json_obj.get("last_name"))
+    gender = format_string_cassandra(json_obj.get("gender"))
+    address = format_string_cassandra(json_obj.get("address"))
+    postcode = json_obj.get("post_code")
+    email = format_string_cassandra(json_obj.get("email"))
+    username = format_string_cassandra(json_obj.get("username"))
+    dob = format_string_cassandra(json_obj.get("dob"))
+    registered_date = format_string_cassandra(json_obj.get("registered_date"))
+    phone = format_string_cassandra(json_obj.get("phone"))
+    picture = format_string_cassandra(json_obj.get("picture"))
 
     try:
-        session.execute(
-            """
-            INSERT INTO spark_streams.created_users(id, first_name, last_name, gender, address, 
-                post_code, email, username, dob, registered_date, phone, picture)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-            (
-                user_id,
-                first_name,
-                last_name,
-                gender,
-                address,
-                postcode,
-                email,
-                username,
-                dob,
-                registered_date,
-                phone,
-                picture,
-            ),
-        )
-        logging.info(f"Data inserted for {first_name} {last_name}")
+        query = f"""
+            INSERT INTO spark_streams.created_users(id, first_name, last_name, gender, address, post_code, email, username, dob, registered_date, phone, picture)
+                VALUES ('{user_id}', '{first_name}', '{last_name}', '{gender}', '{address}', '{postcode}', '{email}', '{username}', '{dob}', '{registered_date}', '{phone}', '{picture}')
+        """
+        session.execute(query)
+        logging.info(f"Data inserted for {email} {first_name} {last_name}")
 
     except Exception as e:
         logging.error(f"could not insert data due to {e}")
+        print(f"Here is the query:\n{query}")
 
 
 def create_spark_connection():
@@ -103,6 +101,7 @@ def create_spark_connection():
     try:
         s_conn = (
             SparkSession.builder.appName("SparkDataStreaming")
+            .config("spark.driver.bindAddress", "localhost")
             .config(
                 "spark.jars.packages",
                 "com.datastax.spark:spark-cassandra-connector_2.12:3.4.1,"
@@ -125,7 +124,7 @@ def connect_to_kafka(spark_conn):
     try:
         spark_df = (
             spark_conn.readStream.format("kafka")
-            .option("kafka.bootstrap.servers", "localhost:9092")
+            .option("kafka.bootstrap.servers", "broker:29092")
             .option("subscribe", "users_created")
             .option("startingOffsets", "earliest")
             .load()
@@ -158,7 +157,7 @@ def create_selection_df_from_kafka(spark_df):
             StructField("last_name", StringType(), False),
             StructField("gender", StringType(), False),
             StructField("address", StringType(), False),
-            StructField("post_code", IntegerType(), False),
+            StructField("post_code", StringType(), False),
             StructField("email", StringType(), False),
             StructField("username", StringType(), False),
             StructField("dob", StringType(), False),
@@ -179,28 +178,70 @@ def create_selection_df_from_kafka(spark_df):
 
 if __name__ == "__main__":
     # create spark connection
-    spark_conn = create_spark_connection()
+    # spark_conn = create_spark_connection()
 
-    if spark_conn is not None:
-        # connect to kafka with spark connection
-        spark_df = connect_to_kafka(spark_conn)
-        selection_df = create_selection_df_from_kafka(spark_df)
-        print(f"{BCOLORS.OKBLUE}{selection_df}{BCOLORS.ENDC}")
-        session = create_cassandra_connection()
+    # if spark_conn is not None:
+    #     # connect to kafka with spark connection
+    #     spark_df = connect_to_kafka(spark_conn)
+    #     selection_df = create_selection_df_from_kafka(spark_df)
+    #     print(f"{BCOLORS.OKBLUE}{selection_df}{BCOLORS.ENDC}")
+    #     session = create_cassandra_connection()
 
-        if session is not None:
-            create_keyspace(session)
-            create_table(session)
-            # insert_data(session)
+    #     consumer = KafkaConsumer(
+    #         'users_created',
+    #         bootstrap_servers="localhost:9092",
+    #         auto_offset_reset="earliest"
+    #     )
 
-            logging.info("Streaming is being started...")
+    #     if session is not None:
+    #         create_keyspace(session)
+    #         create_table(session)
+    #         # insert_data(session)
 
-            streaming_query = (
-                selection_df.writeStream.format("org.apache.spark.sql.cassandra")
-                .option("checkpointLocation", "/tmp/checkpoint")
-                .option("keyspace", "spark_streams")
-                .option("table", "created_users")
-                .start()
-            )
+    #         logging.info("Streaming is being started...")
 
-            streaming_query.awaitTermination()
+    #         streaming_query = (
+    #             selection_df.writeStream.format("org.apache.spark.sql.cassandra")
+    #             .option("checkpointLocation", "/tmp/checkpoint")
+    #             .option("keyspace", "spark_streams")
+    #             .option("table", "created_users")
+    #             .start()
+    #         )
+
+    #         streaming_query.awaitTermination()
+    #         session.shutdown()
+
+    parser = argparse.ArgumentParser(description="Consumer stream to Cassandra DB.")
+    parser.add_argument(
+        "--mode",
+        required=True,
+        help="The mode of consuming the data",
+        choices=["initial", "append"],
+        default="append",
+    )
+    args = parser.parse_args()
+
+    session = create_cassandra_connection()
+
+    stream_mode = "latest"
+    if args.mode == "initial":
+        stream_mode = "earliest"
+
+    consumer = KafkaConsumer(
+        "users_created",
+        bootstrap_servers="localhost:9092",
+        auto_offset_reset=stream_mode,
+    )
+
+    if session is not None:
+        create_keyspace(session)
+        create_table(session)
+
+        try:
+
+            for message in consumer:
+                json_msg = json.loads(message.value.decode("utf-8"))
+                insert_data(session, json_msg)
+        except KeyboardInterrupt as er:
+            print("Consumer not running due to keyboard interruption.")
+            sys.exit()
