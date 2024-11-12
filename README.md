@@ -67,3 +67,6 @@ The following are potential future developments to expand and improve the system
 These additions will enhance the functionality, scalability, security, and usability of the system.
 
 ![Advanced System Architecture](./imgs/architecture.png)
+
+This is the future version for an end-to-end pipeline of a smart city
+![Smart City](./imgs/smart-city.jpg)
